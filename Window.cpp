@@ -1,33 +1,29 @@
 
 #include "Window.h"
 #include <commctrl.h>
-#include <iostream>
-#include <string>
+
 #define NEW_BUTTON 1
 #define OPEN_BUTTON 2
 #define EXIT_BUTTON 3
 #define HELP_BUTTON 4
+#define SAVE_BUTTON 5
 
+LRESULT CALLBACK TabWinProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, UINT_PTR uid, DWORD_PTR dwRefData);
 
-LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
-LRESULT CALLBACK editSubProc(HWND, UINT, WPARAM, LPARAM);
-void create_menu(HWND);
-void resize(HWND, int, int);
-void create_sidebar(HWND);
-void textBox(HWND);
-void create_footer(HWND);
-void updateSidebar(int);
-
+TextView* txtobj;
+HINSTANCE hinst;
 HMENU hmenu;
 HWND hfooter;
-HWND hedit;
-HWND hsidebar;
-WNDPROC editDefaultProc;
+HWND htabwnd;
 int lineCount = 1;
+int currLine = 1;
+int currTab = 0;
+RECT winSize;
+void openFile(HWND);
 
 
-Window::Window()
-    : h_inst(GetModuleHandle(nullptr))
+
+Window::Window(HINSTANCE hinstance):h_inst(hinstance)
 {
 	const wchar_t* CLASS_NAME = L"MainWindowClass";
 
@@ -40,12 +36,17 @@ Window::Window()
 
 	RegisterClass(&wnd_class);
 
+	wnd_class.lpszClassName = L"editClass";
+	wnd_class.lpfnWndProc = editWindProc;
+
+	RegisterClass(&wnd_class);
+
 	DWORD style = WS_OVERLAPPEDWINDOW;
 
 	RECT rect;
-	rect.left = 100;
-	rect.right = 600;
-	rect.bottom = 600;
+	rect.left = 350;
+	rect.right = 1150;
+	rect.bottom = 700;
 	rect.top = 100;
 
 	AdjustWindowRect(&rect, style, false);
@@ -62,9 +63,10 @@ Window::Window()
 		NULL,
 		NULL,
 		h_inst,
-		NULL
+		this
 	);
 	ShowWindow(hwnd, SW_SHOW);
+	hinst = h_inst;
 }
 
 bool Window::processManager()
@@ -80,21 +82,9 @@ bool Window::processManager()
 	return true;
 }
 
-void textBox(HWND hwnd) {
-	hedit = CreateWindowEx(
-		0,
-		L"EDIT",
-		L"",
-		WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | WS_VSCROLL | WS_HSCROLL,
-		20, 0, 480, 460,
-		hwnd,
-		(HMENU)1,
-		GetModuleHandle(NULL),
-		NULL);
-	editDefaultProc = (WNDPROC)SetWindowLongPtr(hedit, GWLP_WNDPROC, (LONG_PTR)editSubProc);
-}
 
-void create_footer(HWND hwnd) {
+
+void footer(HWND hwnd) {
 	hfooter = CreateWindowEx(
 		0,
 		STATUSCLASSNAME,
@@ -112,7 +102,7 @@ void create_footer(HWND hwnd) {
 		return;
 	}
 
-	int parts[] = { 200,-1 };
+	int parts[] = { 400,-1 };
 
 	SendMessage(hfooter, SB_SETPARTS, sizeof(parts) / sizeof(int), (LPARAM)parts);
 
@@ -120,12 +110,13 @@ void create_footer(HWND hwnd) {
 	SendMessage(hfooter, SB_SETTEXT, 1, (LPARAM)L"0 characters");
 }
 
-void create_menu(HWND hwnd) {
+void menu(HWND hwnd) {
 	hmenu = CreateMenu();
 	HMENU hfileMenu = CreateMenu();
 	
 	AppendMenuW(hfileMenu, MF_STRING, NEW_BUTTON, L"New"); 
 	AppendMenuW(hfileMenu, MF_STRING, OPEN_BUTTON, L"Open");
+	AppendMenuW(hfileMenu, MF_STRING, SAVE_BUTTON, L"Save");
 	AppendMenuW(hfileMenu, MF_DISABLED, NULL,NULL);
 	AppendMenuW(hfileMenu, MF_STRING, EXIT_BUTTON, L"Exit");
 
@@ -136,79 +127,105 @@ void create_menu(HWND hwnd) {
 
 }
 
-void updateSidebar(int line) {
-	wchar_t prev[1000];
-	GetWindowTextW(hsidebar, prev, 1000);
-	std::string num = "\n " + std::to_string(line);
-	
-	int utf16Size = MultiByteToWideChar(CP_UTF8, 0, num.c_str(), -1, NULL, 0);
-	wchar_t* utf16Str = new wchar_t[utf16Size];
-	MultiByteToWideChar(CP_UTF8, 0, num.c_str(), -1, utf16Str, utf16Size);
-
-	// Access the const wchar_t* representation of the UTF-16 string
-	const wchar_t* str = utf16Str;
-
-
-	size_t len = wcslen(prev);
-	wcscpy_s(prev+len, 1000 - len,str);
-	SetWindowTextW(hsidebar, prev);
+void resize(HWND hwnd,RECT rect) {
+	HWND hedit_t = txtobj->getHandle();
+	MoveWindow(hedit_t, 20, 20, rect.right - 20, rect.bottom - 40,true);
+	MoveWindow(hfooter, 0, 50, rect.right, 10,true);
+	MoveWindow(htabwnd, 20, 0, rect.right - 20, 20, true);
 }
 
-void resize(HWND hwnd, int width, int height) {
-
-}
-
-void create_sidebar(HWND hwnd) {
-	hsidebar = CreateWindowEx(
+void tabwnd(HWND hwnd) {
+	htabwnd = CreateWindowEx(
 		0,
-		L"STATIC",
-		L" 1",
-		WS_VISIBLE | WS_CHILD | SS_LEFT,
-		0, 0, 20, 460,
-		hwnd,
-		(HMENU)1,
+		WC_TABCONTROL,
 		NULL,
+		WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SBT_NOBORDERS,
+		20, 0, 1536, 20,
+		hwnd,
+		NULL,
+		GetModuleHandle(NULL),
 		NULL
 	);
-	
+	TCITEM tie;
+	tie.mask = TCIF_TEXT;
+	LPWSTR tab = new wchar_t[30];
+	wcscpy_s(tab, 14, L"  Untitled1  ");
+	tie.pszText = tab;
+
+	TabCtrl_InsertItem(htabwnd, currTab++, &tie);
 }
+
+void addTab() {
+	TCITEM tie;
+	tie.mask = TCIF_TEXT;
+	LPWSTR tab = new wchar_t[30];
+	wcscpy_s(tab, 14, L"  Untitled2  ");
+	tie.pszText = tab;
+
+	TabCtrl_InsertItem(htabwnd, currTab++, &tie);
+}
+
+void renameTab(LPWSTR newName,int index) {
+	TCITEM tie;
+	tie.mask = TCIF_TEXT;
+	tie.pszText = newName;
+
+	SendMessage(htabwnd, TCM_SETITEM, index, (LPARAM)&tie);
+}
+
 
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	switch (uMsg) {
+	case WM_KEYDOWN:
+		OutputDebugString(L"KeyPressed from parent\n");
+		break;
 	case WM_COMMAND:
 		switch (wParam) {
 		case NEW_BUTTON:
-			std::cout << "1" << std::endl;
+			addTab();
+			txtobj->newFile(hwnd);
 			MessageBeep(MB_OK);
 			break;
 		case OPEN_BUTTON:
+			txtobj->pflag = true;
 			MessageBeep(MB_OK);
-			std::cout << "2" << std::endl;
+			int index;
+			index = TabCtrl_GetCurSel(htabwnd);
+			LPWSTR name;
+			if(name = txtobj->openFile(hwnd,index)) renameTab(name,index);
+			InvalidateRect(txtobj->getHandle(), NULL, TRUE);
 			break;
 		case EXIT_BUTTON:
-			std::cout << "3" << std::endl;
 			DestroyWindow(hwnd);
+			break;
+		case SAVE_BUTTON:
 			break;
 		}
 		break;
 	case WM_CREATE:
-		create_menu(hwnd);
-		textBox(hwnd);
-		create_footer(hwnd);
-		create_sidebar(hwnd);
+		txtobj = new TextView(hwnd, hinst);
+		txtobj->newFile(hwnd);
+		SetFocus(txtobj->getHandle());
+		menu(hwnd);
+		footer(hwnd);
+		tabwnd(hwnd);
+		GetClientRect(hwnd,&winSize);
+
 		break;
 	case WM_CLOSE:
 		DestroyWindow(hwnd);
 		break;
 	case WM_DESTROY:
+		delete(txtobj);
 		PostQuitMessage(0);
 		break;
 	case WM_PAINT:
 		PAINTSTRUCT ps;
 		RECT rect;
 		GetClientRect(hwnd, &rect);
+		resize(hwnd, rect);
 		HDC hdc;
 		hdc = BeginPaint(hwnd, &ps);
 		HBRUSH brush;
@@ -217,18 +234,33 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		DeleteObject(brush);
 		EndPaint(hwnd, &ps);
 		break;
+	case WM_SIZE:
+		RECT rect1;
+		GetClientRect(hwnd, &rect1);
+		resize(hwnd, rect1);
+		break;
+	case WM_SETFOCUS:
+		SetFocus(txtobj->getHandle());
+		break;
+	case WM_NOTIFY:
+		if (((LPNMHDR)lParam)->hwndFrom == htabwnd)
+		{
+			switch (((LPNMHDR)lParam)->code)
+			{
+			case TCN_SELCHANGE:
+			{
+				int index = TabCtrl_GetCurSel(htabwnd);
+				txtobj->printTxt(index);
+				SendMessageW(txtobj->getHandle(), WM_PAINT, 0, 0);
+			}
+			break;
+			}
+		}
+		break;
 	}
 	return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
 
-LRESULT CALLBACK editSubProc(HWND hwnd, UINT umsg, WPARAM wparam, LPARAM lparam) {
-	switch (umsg) {
-	case WM_CHAR:
-		if(wparam == VK_RETURN)
-			updateSidebar(++lineCount);
-		break;
-	
-	}
-	return CallWindowProc(editDefaultProc, hwnd, umsg, wparam, lparam);
-}
+
+
